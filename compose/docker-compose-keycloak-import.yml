@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres-service-import
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Madrid
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    # Connect to a common network
+    networks: [appnet]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.5
+    container_name: keycloak-service-import
+    restart: unless-stopped
+    env_file:
+      - .env
+    command:
+      - start
+      - --hostname-strict=false
+      - --health-enabled=true
+      - --http-enabled=true
+      - --import-realm
+      - --spi-import-export-dir=/opt/keycloak/data/impor
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      # Optional: give more margin to the pool while Postgres starts
+      QUARKUS_DATASOURCE_JDBC_ACQUISITION_TIMEOUT: 60S
+      # Optional: bootstrap admin to log in directly
+      #KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME}
+      #KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    volumes:
+      - ../keycloak-init:/opt/keycloak/data/import
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Optional: Keycloak healthcheck (when already connected to the DB)
+    healthcheck:
+      # TCP check: Open connection to 127.0.0.1:8080; if it fails, exit 1
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    # Connect to a common network
+    networks: [appnet]
+
+  app-fastapi:
+    build:
+      context: ../app
+      dockerfile: Dockerfile
+    container_name: app-fastapi-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    healthcheck:
+      # TCP check: Open connection to 127.0.0.1:8001; if it fails, exit 1
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8001 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    # Connect to a common network
+    networks: [appnet]
+
+networks:
+  appnet: {}
